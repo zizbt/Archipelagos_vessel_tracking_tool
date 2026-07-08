@@ -1,0 +1,68 @@
+<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.16.12-Hannover">
+  <identifier></identifier>
+  <parentidentifier></parentidentifier>
+  <language></language>
+  <type>dataset</type>
+  <title></title>
+  <abstract>1. National Marine Park of Alonnisos Northern Sporades (marine and terrestrial area)
+- Legislation establishing the Marine Park: M.D 23537/2003 (G.G Vol. D No. 621)
+- Purpose of designation (article 1, M.D 23537/2003):
+The protection, conservation and management of nature and scenery as natural heritage and valuable national natural resource. The terrestrial and marine areas designated as National Marine Park have a distinct biological, ecological, aesthetical, scientific, geomorphological and educational value. Moreover, the ecosystem of North Sporades is valuable due to the existence of rare flora and fauna species, habitats, natural formations. In addition, the largest Monk Seal population in the world lives and reproduces in the area.
+
+
+- Coordinates (article 2, M.D 23537/2003)
+Α 39ο 30΄ 24ο 10΄
+Β 39ο 34΄ 24ο 10΄
+Γ 39ο 22΄ 24ο 27΄
+Δ 38ο 59΄ 24ο 09΄
+Ε 38ο 59΄ 24ο 01΄
+Ζ 39ο 03΄ 23ο 49΄
+Η 39ο 20΄ 23ο 49΄
+Θ 39ο 30΄ 24ο 01’
+See also attached document and https://alieia.hcg.gr/ETHPAVS/alonisos.html.
+- The Marine Park is divided in two areas (incl. marine and terrestrial) which are, in turn, separated in zones. Those zones are either Natura areas or Areas of Special Regulations.
+The marine Natura areas are: Zone A1, A3, A4.  
+
+
+- Management measures (articles 3 &amp; 4, M.D 23537/2003)
+Regulation of bottom trawling (article 3 par.8 &amp; article 4 (I)(9) &amp; (II)(4)(c)) https://alieia.hcg.gr/ETHPAVS/alonisos.html):
+Bottom trawling is prohibited within a distance of 2 n.m off the coast throughout the whole area of the Marine Park.   
+- According to article 2 par. 2, Zone A1 is a Natura area including island Piperi and the marine area around the island up to a distance of 3 n.m off the coast.
+
+</abstract>
+  <contact>
+    <name></name>
+    <organization></organization>
+    <position></position>
+    <voice></voice>
+    <fax></fax>
+    <email></email>
+    <role></role>
+  </contact>
+  <links/>
+  <fees></fees>
+  <encoding></encoding>
+  <crs>
+    <spatialrefsys>
+      <wkt></wkt>
+      <proj4></proj4>
+      <srsid>0</srsid>
+      <srid>0</srid>
+      <authid></authid>
+      <description></description>
+      <projectionacronym></projectionacronym>
+      <ellipsoidacronym></ellipsoidacronym>
+      <geographicflag>false</geographicflag>
+    </spatialrefsys>
+  </crs>
+  <extent>
+    <spatial crs="" miny="0" maxx="0" maxy="0" minx="0" minz="0" maxz="0" dimensions="2"/>
+    <temporal>
+      <period>
+        <start></start>
+        <end></end>
+      </period>
+    </temporal>
+  </extent>
+</qgis>

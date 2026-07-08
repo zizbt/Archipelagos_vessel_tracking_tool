@@ -1,0 +1,10 @@
+{
+"type": "FeatureCollection",
+"name": "italy_EEZ",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "zone_name": "Central-southern Tyrrhenian Sea zone", "notes": "Excludes territorial waters around Ustica. Outer limit follows national territorial waters from P02-P03 and P04-P01." }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 9.637856, 41.404722 ], [ 12.348453, 41.404722 ], [ 11.825853, 38.111633 ], [ 9.774128, 38.980658 ], [ 9.637856, 41.404722 ] ] ] } },
+{ "type": "Feature", "properties": { "zone_name": "Ionian Sea EEZ", "notes": "Boundary P06-P07 coincides with Italy-Greece Agreement (Law No. 93/2021). Outer limit follows territorial waters from P08-P05." }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 15.34685, 36.557761 ], [ 18.344275, 35.568931 ], [ 18.957581, 39.960683 ], [ 18.744744, 39.993983 ], [ 15.34685, 36.557761 ] ] ] } },
+{ "type": "Feature", "properties": { "zone_name": "Northern and Central-Southern Adriatic Sea", "notes": "Boundary P10-P11 coincides with Italy-Croatia Agreement (Law No. 62/2023). Outer limit follows territorial waters from P11-P09." }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 17.497761, 41.091569 ], [ 17.9975, 41.638889 ], [ 13.197944, 45.440869 ], [ 17.497761, 41.091569 ] ] ] } }
+]
+}
