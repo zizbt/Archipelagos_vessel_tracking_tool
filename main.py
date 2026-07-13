@@ -15,6 +15,7 @@ import VP_report
 import AFE_report
 import AFE_bulk_map
 import AFE_map
+import Port_visits
 
 # --- Configuration ---
 ctk.set_appearance_mode("Dark") 
@@ -102,6 +103,9 @@ class VesselTracker(TkinterDnD.Tk):
         
         ctk.CTkButton(frame, text="Apparent Fishing Effort", height=60, width=350, fg_color="#1f538d",
                       command=self.show_fishing_effort_view).pack(pady=10)
+        
+        ctk.CTkButton(frame, text="Port Visits", height=60, width=350, fg_color="#1f538d",
+                      command=self.show_port_visits_view).pack(pady=10)
 
         ctk.CTkButton(frame, text="Reset API Key", fg_color="transparent", text_color="gray", 
                       command=self.handle_reset).pack(side="bottom", pady=20)
@@ -634,8 +638,186 @@ class VesselTracker(TkinterDnD.Tk):
         self.run_afe_single_btn = ctk.CTkButton(frame, text="Generate Map", fg_color="#1f538d", 
                                                    command=self.handle_generate_afe_single_map, width=250, height=35)
 
+    # --- VIEW: PORT VISITS ---
+    def show_port_visits_view(self):
+        self.clear_view()
+        self.pv_selected_vessel = None
+        self.pv_results = {}
+
+        frame = ctk.CTkFrame(self, corner_radius=15)
+        frame.pack(padx=20, pady=10, fill="both", expand=True)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", padx=10, pady=5)
+        ctk.CTkButton(header, text="← Back", width=60, fg_color="transparent",
+                        command=self.show_main_menu).pack(side="left")
+
+        ctk.CTkLabel(frame, text="Port Visits Lookup",
+                        font=ctk.CTkFont(size=22, weight="bold")).pack(pady=5)
+        ctk.CTkLabel(frame, text="Search a vessel by name, MMSI or IMO, then retrieve every "
+                                    "port it visited during the selected period.",
+                        font=ctk.CTkFont(size=12), wraplength=400).pack(pady=(0, 10), padx=20)
+
+        # --- Search row ---
+        search_row = ctk.CTkFrame(frame, fg_color="transparent")
+        search_row.pack(fill="x", padx=20, pady=5)
+        self.pv_query_entry = ctk.CTkEntry(search_row, placeholder_text="Vessel name / MMSI / IMO", height=32)
+        self.pv_query_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.pv_search_btn = ctk.CTkButton(search_row, text="Search", width=90, height=32,
+                                            command=self.handle_search_vessel)
+        self.pv_search_btn.pack(side="right")
+
+        # --- Results list ---
+        self.pv_list_frame = ctk.CTkScrollableFrame(frame, height=160, label_text="Vessels Found")
+        self.pv_list_frame.pack(fill="x", padx=20, pady=5)
+
+        self.pv_selected_label = ctk.CTkLabel(frame, text="Selected: None",
+                                                text_color="#3a7ebf",
+                                                font=ctk.CTkFont(size=12, weight="bold"))
+        self.pv_selected_label.pack(pady=2)
+
+        # --- Dates ---
+        date_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        date_frame.pack(pady=5)
+
+        start_box = ctk.CTkFrame(date_frame, fg_color="transparent")
+        start_box.pack(side="left", padx=10)
+        ctk.CTkLabel(start_box, text="Start Date:").pack()
+        self.pv_start_entry = ctk.CTkEntry(start_box, placeholder_text="YYYY-MM-DD", width=140)
+        self.pv_start_entry.insert(0, "2025-01-01")
+        self.pv_start_entry.pack()
+
+        end_box = ctk.CTkFrame(date_frame, fg_color="transparent")
+        end_box.pack(side="left", padx=10)
+        ctk.CTkLabel(end_box, text="End Date:").pack()
+        self.pv_end_entry = ctk.CTkEntry(end_box, placeholder_text="YYYY-MM-DD", width=140)
+        self.pv_end_entry.insert(0, "2025-12-31")
+        self.pv_end_entry.pack()
+
+        self.pv_status_label = ctk.CTkLabel(frame, text="", text_color="gray", wraplength=400)
+        self.pv_status_label.pack(pady=(10, 3))
+
+        self.pv_progress = ctk.CTkProgressBar(frame, width=300)
+        self.pv_progress.set(0)
+
+        self.pv_run_btn = ctk.CTkButton(frame, text="Get Port Visits", fg_color="#d15400",
+                                        command=self.handle_get_port_visits, width=250, height=38,
+                                        font=ctk.CTkFont(weight="bold"))
+        self.pv_run_btn.pack(pady=15)
 
 
+
+    # --- LOGIC: PORT VISITS ---
+    def update_pv_progress(self, text, value):
+        self.after(0, lambda: self.pv_status_label.configure(
+            text=text, text_color="#FFB300" if value < 1.0 else "#4CAF50"))
+        self.after(0, lambda: self.pv_progress.set(value))
+
+    def handle_search_vessel(self):
+        query = self.pv_query_entry.get().strip()
+        if not query:
+            self.pv_status_label.configure(text="Enter a name, MMSI or IMO first.", text_color="#FF5252")
+            return
+
+        self.pv_search_btn.configure(state="disabled", text="...")
+        self.pv_status_label.configure(text="Searching GFW vessel registry...", text_color="#FFB300")
+
+        def worker():
+            try:
+                client = VP_gfw.get_gfw_client(self.api_key)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                df = loop.run_until_complete(Port_visits.search_vessel(query, client))
+                self.after(0, lambda: self.populate_vessel_results(df))
+            except Exception as e:
+                msg = str(e)
+                self.after(0, lambda: self.pv_status_label.configure(
+                    text=f"Search failed: {msg[:70]}", text_color="#FF5252"))
+                self.after(0, lambda: self.pv_search_btn.configure(state="normal", text="Search"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def populate_vessel_results(self, df):
+        for widget in self.pv_list_frame.winfo_children():
+            widget.destroy()
+        self.pv_results = {}
+        self.pv_search_btn.configure(state="normal", text="Search")
+
+        if df is None or df.empty:
+            self.pv_status_label.configure(text="No vessel found.", text_color="#FF5252")
+            return
+
+        for _, row in df.iterrows():
+            vid = row.get("vessel_id")
+            if pd.isnull(vid):
+                continue
+            name = row.get("ship_name") if pd.notnull(row.get("ship_name")) else "Unknown"
+            mmsi = row.get("mmsi") if pd.notnull(row.get("mmsi")) else "?"
+            flag = row.get("flag") if pd.notnull(row.get("flag")) else "?"
+            label = f"{name} | MMSI {mmsi} | {flag}"
+            self.pv_results[label] = vid
+
+            ctk.CTkButton(self.pv_list_frame, text=label, fg_color="transparent",
+                          text_color="white", anchor="w", hover_color="#1f538d",
+                          command=lambda l=label: self.select_pv_vessel(l)).pack(fill="x", pady=1)
+
+        if not self.pv_results:
+            self.pv_status_label.configure(text="Vessels found but no usable ID.", text_color="#FF5252")
+            return
+
+        self.pv_status_label.configure(text=f"Found {len(self.pv_results)} vessel(s).",
+                                       text_color="#4CAF50")
+        
+
+    def select_pv_vessel(self, label):
+        self.pv_selected_vessel = (label, self.pv_results[label])
+        self.pv_selected_label.configure(text=f"Selected: {label}")
+
+    def handle_get_port_visits(self):
+        if not self.pv_selected_vessel:
+            self.pv_status_label.configure(text="Select a vessel first!", text_color="#FF5252")
+            return
+
+        start = self.pv_start_entry.get().strip()
+        end = self.pv_end_entry.get().strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", start) or not re.match(r"^\d{4}-\d{2}-\d{2}$", end):
+            self.pv_status_label.configure(text="Error: Use YYYY-MM-DD", text_color="#FF5252")
+            return
+
+        self.pv_progress.pack(pady=5)
+        self.pv_progress.set(0.1)
+        self.pv_run_btn.configure(state="disabled")
+        self.pv_status_label.configure(text="Fetching port visit events...", text_color="#FFB300")
+
+        label, vessel_id = self.pv_selected_vessel
+        vessel_name = label.split(" | ")[0]
+
+        def worker():
+            try:
+                client = VP_gfw.get_gfw_client(self.api_key)
+                out, n = Port_visits.generate_port_report(
+                    vessel_id, vessel_name, start, end, client,
+                    progress_callback=self.update_pv_progress
+                )
+                self.after(0, lambda: self.finish_pv(out, n))
+            except Exception as e:
+                msg = str(e)
+                print(msg)
+                self.after(0, lambda: self.pv_status_label.configure(
+                    text=f"Error: {msg[:150]}", text_color="#FF5252"))
+                self.after(0, lambda: self.pv_progress.set(0))
+                self.after(0, lambda: self.pv_run_btn.configure(
+                    state="normal", text="Get Port Visits", fg_color="#d15400"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_pv(self, out_file, n_visits):
+        self.pv_progress.set(1.0)
+        self.pv_status_label.configure(text=f"{n_visits} port visits exported.",
+                                       text_color="#4CAF50")
+        self.pv_run_btn.configure(text="Open CSV", state="normal", fg_color="#2E7D32",
+                                  command=lambda: self.open_file(out_file))
+        
 
     # --- LOGIC HANDLERS FOR APPARENT FISHING EFFORT ---
     # AFE REPORT
