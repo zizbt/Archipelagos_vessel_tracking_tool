@@ -769,7 +769,20 @@ class VesselTracker(TkinterDnD.Tk):
             flag = row.get("flag") if pd.notnull(row.get("flag")) else "?"
             owner = row.get("owner") if pd.notnull(row.get("owner")) else "Owner unknown"
             label = f"{name} | MMSI {mmsi} | {flag} | Owner Name: {owner}"
-            self.pv_results[label] = {"ids": ids, "name": name, "owner": owner, "mmsi": mmsi}
+            grp = df[df["mmsi"] == mmsi]
+            def first_valid(col):
+                s = grp[col].dropna() if col in grp.columns else pd.Series(dtype=object)
+                return s.iloc[0] if not s.empty else None
+            self.pv_results[label] = {
+                "ids": ids,
+                "name": name,
+                "owner": owner,
+                "mmsi": mmsi,
+                "imo": first_valid("imo"),
+                "vessel_type": first_valid("vessel_type"),
+                "gear_type": first_valid("gear_type"),
+                "length_m": first_valid("length_m"),
+            }
 
             ctk.CTkButton(self.pv_list_frame, text=label, fg_color="transparent",
                           text_color="white", anchor="w", hover_color="#1f538d",
@@ -806,14 +819,18 @@ class VesselTracker(TkinterDnD.Tk):
         label, info = self.pv_selected_vessel
         vessel_ids = info["ids"]
         vessel_name = info["name"]
-        owner = info["owner"]
 
         def worker():
             try:
                 client = VP_gfw.get_gfw_client(self.api_key)
                 out, n, n_ports = Port_visits.generate_port_report(
                     vessel_ids, vessel_name, start, end, client,
-                    owner=owner,
+                    owner=info["owner"],
+                    mmsi=info["mmsi"],
+                    imo=info["imo"],
+                    vessel_type=info["vessel_type"],
+                    gear_type=info["gear_type"],
+                    length_m=info["length_m"],
                     progress_callback=self.update_pv_progress
                 )
                 self.after(0, lambda: self.finish_pv(out, n, n_ports))

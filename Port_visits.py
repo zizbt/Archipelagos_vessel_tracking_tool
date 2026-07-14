@@ -9,56 +9,65 @@ async def search_vessel(query, client):
     result = await client.vessels.search_vessels(
         query=query,
         datasets=["public-global-vessel-identity:latest"],
-        includes=["OWNERSHIP"],
+        includes=["OWNERSHIP", "MATCH_CRITERIA"],
     )
     df = result.df()
     if df.empty:
         return df
 
+    def _d(x):
+        """Pydantic -> dict si besoin."""
+        if hasattr(x, "model_dump"):
+            return x.model_dump()
+        return x if isinstance(x, dict) else {}
+
     rows = []
     for _, r in df.iterrows():
         d = r.to_dict()
-        owners = (d.get("registry_owners")
-            or d.get("registryOwners")
-            or d.get("owners")
-            or [])
-        if isinstance(owners, list) and owners:
-            # Le plus récent en dernier dans la liste GFW
-            o = owners[-1]
-            if hasattr(o, "model_dump"):
-                o = o.model_dump()
-            owner_name = o.get("name") if isinstance(o, dict) else None
-            owner_flag = o.get("flag") if isinstance(o, dict) else None
-        else:
-            owner_name = owner_flag = None
 
-        infos = d.get("self_reported_info") or d.get("selfReportedInfo")
+        owners = d.get("registry_owners") or []
+        owner_name = _d(owners[-1]).get("name") if owners else None
 
-        if isinstance(infos, list) and infos:
-            for i in infos:
-                rows.append({
-                    "vessel_id": i.get("id"),
-                    "ship_name": i.get("ship_name") or i.get("shipname"),
-                    "mmsi": i.get("ssvid"),
-                    "imo": i.get("imo"),
-                    "flag": i.get("flag"),
-                    "owner": owner_name,
-                    "owner_flag": owner_flag,
-                    "from": i.get("transmission_date_from"),
-                    "to": i.get("transmission_date_to"),
-                })
-        else:
-            # Fallback : structure déjà aplatie
+        registry = d.get("registry_info") or []
+        reg = _d(registry[-1]) if registry else {}
+        reg_imo = reg.get("imo")
+        reg_length = reg.get("length_m")
+        reg_tonnage = reg.get("tonnage_gt")
+
+        gear_by_vid, ship_by_vid = {}, {}
+        any_gear = any_ship = None
+
+        for c in (d.get("combined_sources_info") or []):
+            c = _d(c)
+            vid = c.get("vessel_id")
+            gears = c.get("gear_types") or []
+            ships = c.get("ship_types") or []
+            if gears:
+                g = _d(gears[-1]).get("name")
+                gear_by_vid[vid] = g
+                any_gear = any_gear or g
+            if ships:
+                s = _d(ships[-1]).get("name")
+                ship_by_vid[vid] = s
+                any_ship = any_ship or s
+
+        for i in (d.get("self_reported_info") or []):
+            i = _d(i)
+            vid = i.get("id")
             rows.append({
-                "vessel_id": d.get("id"),
-                "ship_name": d.get("ship_name") or d.get("shipname"),
-                "mmsi": d.get("ssvid") or d.get("mmsi"),
-                "imo": d.get("imo"),
-                "flag": d.get("flag"),
+                "vessel_id": vid,
+                "ship_name": i.get("ship_name"),
+                "mmsi": i.get("ssvid"),
+                "imo": i.get("imo") or reg_imo,
+                "call_sign": i.get("call_sign"),
+                "flag": i.get("flag"),
+                "vessel_type": ship_by_vid.get(vid),
+                "gear_type": gear_by_vid.get(vid),
+                "length_m": reg_length,
+                "tonnage_gt": reg_tonnage,
                 "owner": owner_name,
-                "owner_flag": owner_flag,
-                "from": d.get("transmission_date_from"),
-                "to": d.get("transmission_date_to"),
+                "from": i.get("transmission_date_from"),
+                "to": i.get("transmission_date_to"),
             })
 
     out = pd.DataFrame(rows)
@@ -146,7 +155,9 @@ async def load_port_visits(vessel_ids, start, end, client):
 
 
 def generate_port_report(vessel_ids, vessel_name, start, end, client,
-                         owner=None, progress_callback=None):
+                         owner=None, mmsi=None, imo=None,
+                         vessel_type=None, gear_type=None, length_m=None,
+                         progress_callback=None):
     if progress_callback:
         progress_callback("Fetching port visits...", 0.3)
 
@@ -162,12 +173,16 @@ def generate_port_report(vessel_ids, vessel_name, start, end, client,
     if df.empty:
         raise ValueError("No port visits found for this vessel/period.")
 
+    df.insert(0, "length_m", length_m if length_m else "Unknown")
+    df.insert(0, "gear_type", gear_type if gear_type else "Unknown")
+    df.insert(0, "vessel_type", vessel_type if vessel_type else "Unknown")
+    df.insert(0, "imo", imo if imo else "Unknown")
+    df.insert(0, "mmsi", mmsi if mmsi else "Unknown")
     df.insert(0, "owner", owner if owner else "Unknown")
     df.insert(0, "ship_name", vessel_name)
 
     safe = "".join(c for c in str(vessel_name) if c.isalnum() or c in " _-").strip()
 
-    # Fichier temporaire : nettoyé par l'OS, pas dans le dossier du projet
     tmp_dir = tempfile.gettempdir()
     out = os.path.join(tmp_dir, f"PORT_visits_{safe}_{start}-{end}.csv")
 
