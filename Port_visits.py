@@ -64,11 +64,6 @@ async def load_port_visits(vessel_ids, start, end, client):
     if df.empty:
         return df
 
-    print("EVENT COLUMNS:", df.columns.tolist())
-    print("PORT_VISIT SAMPLE:", df.iloc[0].get("port_visit"))
-    if df.empty:
-        return df
-
     def _anchor(pv, key):
         if pv is None:
             return None
@@ -90,20 +85,28 @@ async def load_port_visits(vessel_ids, start, end, client):
     
     df["port_name"] = df["port_visit"].apply(lambda p: _anchor(p, "name"))
     df["port_flag"] = df["port_visit"].apply(lambda p: _anchor(p, "flag"))
-    df["duration_hrs"] = df["port_visit"].apply(
-        lambda p: p.get("durationHrs") if isinstance(p, dict) else None
-    )
-    df["confidence"] = df["port_visit"].apply(
-        lambda p: p.get("confidence") if isinstance(p, dict) else None
-    )
+    df["port_id"] = df["port_visit"].apply(lambda p: _anchor(p, "id"))
 
-    keep = ["vessel_id", "start", "end", "port_name", "port_flag",
+    def _field(pv, key):
+        if hasattr(pv, "model_dump"):
+            pv = pv.model_dump()
+        return pv.get(key) if isinstance(pv, dict) else None
+
+    df["duration_hrs"] = df["port_visit"].apply(lambda p: _field(p, "duration_hrs"))
+    df["confidence"] = df["port_visit"].apply(lambda p: _field(p, "confidence"))
+
+    # Dates lisibles
+    df["start"] = pd.to_datetime(df["start"]).dt.strftime("%Y-%m-%d %H:%M")
+    df["end"] = pd.to_datetime(df["end"]).dt.strftime("%Y-%m-%d %H:%M")
+    df["duration_hrs"] = pd.to_numeric(df["duration_hrs"], errors="coerce").round(1)
+
+    keep = ["start", "end", "port_name", "port_flag", "port_id",
             "duration_hrs", "confidence", "lat", "lon"]
     keep = [c for c in keep if c in df.columns]
     return df[keep].sort_values("start")
 
 
-def generate_port_report(vessel_id, vessel_name, start, end, client,
+def generate_port_report(vessel_ids, vessel_name, start, end, client,
                          progress_callback=None):
     if progress_callback:
         progress_callback("Fetching port visits...", 0.3)
@@ -111,7 +114,7 @@ def generate_port_report(vessel_id, vessel_name, start, end, client,
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     df = loop.run_until_complete(
-        load_port_visits(vessel_id, start, end, client)
+        load_port_visits(vessel_ids, start, end, client)
     )
 
     if progress_callback:
@@ -123,5 +126,10 @@ def generate_port_report(vessel_id, vessel_name, start, end, client,
     df.insert(0, "ship_name", vessel_name)
     safe = "".join(c for c in str(vessel_name) if c.isalnum() or c in " _-").strip()
     out = f"PORT_visits_{safe}_{start}-{end}.csv"
-    df.to_csv(out, index=False)
+
+    try:
+        df.to_csv(out, index=False)
+    except PermissionError:
+        raise PermissionError(f"Close {out} before running the report.")
+
     return out, len(df)

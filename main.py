@@ -704,7 +704,8 @@ class VesselTracker(TkinterDnD.Tk):
                                         command=self.handle_get_port_visits, width=250, height=38,
                                         font=ctk.CTkFont(weight="bold"))
         self.pv_run_btn.pack(pady=15)
-
+        self.pv_start_entry.bind("<KeyRelease>", self.reset_pv_button)
+        self.pv_end_entry.bind("<KeyRelease>", self.reset_pv_button)
 
 
     # --- LOGIC: PORT VISITS ---
@@ -741,21 +742,35 @@ class VesselTracker(TkinterDnD.Tk):
         for widget in self.pv_list_frame.winfo_children():
             widget.destroy()
         self.pv_results = {}
+        self.reset_pv_button()
         self.pv_search_btn.configure(state="normal", text="Search")
 
         if df is None or df.empty:
             self.pv_status_label.configure(text="No vessel found.", text_color="#FF5252")
             return
 
+        # Identité la plus récente en tête (évite d'afficher "Unknown")
+        if "to" in df.columns:
+            df = df.sort_values("to", ascending=False)
+
+        seen_mmsi = set()
         for _, row in df.iterrows():
             vid = row.get("vessel_id")
-            if pd.isnull(vid):
+            mmsi = row.get("mmsi")
+            if pd.isnull(vid) or pd.isnull(mmsi):
                 continue
+
+            # Tous les vessel_id de ce MMSI (identités successives)
+            ids = df[df["mmsi"] == mmsi]["vessel_id"].dropna().tolist()
+
+            if mmsi in seen_mmsi:
+                continue
+            seen_mmsi.add(mmsi)
+
             name = row.get("ship_name") if pd.notnull(row.get("ship_name")) else "Unknown"
-            mmsi = row.get("mmsi") if pd.notnull(row.get("mmsi")) else "?"
             flag = row.get("flag") if pd.notnull(row.get("flag")) else "?"
             label = f"{name} | MMSI {mmsi} | {flag}"
-            self.pv_results[label] = vid
+            self.pv_results[label] = ids          # <- une LISTE, plus un seul id
 
             ctk.CTkButton(self.pv_list_frame, text=label, fg_color="transparent",
                           text_color="white", anchor="w", hover_color="#1f538d",
@@ -768,10 +783,10 @@ class VesselTracker(TkinterDnD.Tk):
         self.pv_status_label.configure(text=f"Found {len(self.pv_results)} vessel(s).",
                                        text_color="#4CAF50")
         
-
     def select_pv_vessel(self, label):
         self.pv_selected_vessel = (label, self.pv_results[label])
         self.pv_selected_label.configure(text=f"Selected: {label}")
+        self.reset_pv_button()
 
     def handle_get_port_visits(self):
         if not self.pv_selected_vessel:
@@ -789,14 +804,14 @@ class VesselTracker(TkinterDnD.Tk):
         self.pv_run_btn.configure(state="disabled")
         self.pv_status_label.configure(text="Fetching port visit events...", text_color="#FFB300")
 
-        label, vessel_id = self.pv_selected_vessel
+        label, vessel_ids = self.pv_selected_vessel
         vessel_name = label.split(" | ")[0]
 
         def worker():
             try:
                 client = VP_gfw.get_gfw_client(self.api_key)
                 out, n = Port_visits.generate_port_report(
-                    vessel_id, vessel_name, start, end, client,
+                    vessel_ids, vessel_name, start, end, client,
                     progress_callback=self.update_pv_progress
                 )
                 self.after(0, lambda: self.finish_pv(out, n))
@@ -817,7 +832,14 @@ class VesselTracker(TkinterDnD.Tk):
                                        text_color="#4CAF50")
         self.pv_run_btn.configure(text="Open CSV", state="normal", fg_color="#2E7D32",
                                   command=lambda: self.open_file(out_file))
-        
+
+    def reset_pv_button(self, *args):
+        self.pv_run_btn.configure(
+            text="Get Port Visits", state="normal", fg_color="#d15400",
+            command=self.handle_get_port_visits
+        )
+        self.pv_progress.set(0)
+        self.pv_progress.pack_forget()  
 
     # --- LOGIC HANDLERS FOR APPARENT FISHING EFFORT ---
     # AFE REPORT
