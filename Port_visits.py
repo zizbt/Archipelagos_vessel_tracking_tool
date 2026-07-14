@@ -1,7 +1,9 @@
 import asyncio
+from asyncio import events
 import pandas as pd
 import gfwapiclient as gfw
-
+import tempfile
+import os
 
 async def search_vessel(query, client):
     result = await client.vessels.search_vessels(
@@ -16,8 +18,20 @@ async def search_vessel(query, client):
     rows = []
     for _, r in df.iterrows():
         d = r.to_dict()
+        owners = (d.get("registry_owners")
+            or d.get("registryOwners")
+            or d.get("owners")
+            or [])
+        if isinstance(owners, list) and owners:
+            # Le plus récent en dernier dans la liste GFW
+            o = owners[-1]
+            if hasattr(o, "model_dump"):
+                o = o.model_dump()
+            owner_name = o.get("name") if isinstance(o, dict) else None
+            owner_flag = o.get("flag") if isinstance(o, dict) else None
+        else:
+            owner_name = owner_flag = None
 
-        # Les identités sont dans self_reported_info (liste de dicts)
         infos = d.get("self_reported_info") or d.get("selfReportedInfo")
 
         if isinstance(infos, list) and infos:
@@ -28,6 +42,8 @@ async def search_vessel(query, client):
                     "mmsi": i.get("ssvid"),
                     "imo": i.get("imo"),
                     "flag": i.get("flag"),
+                    "owner": owner_name,
+                    "owner_flag": owner_flag,
                     "from": i.get("transmission_date_from"),
                     "to": i.get("transmission_date_to"),
                 })
@@ -39,6 +55,8 @@ async def search_vessel(query, client):
                 "mmsi": d.get("ssvid") or d.get("mmsi"),
                 "imo": d.get("imo"),
                 "flag": d.get("flag"),
+                "owner": owner_name,
+                "owner_flag": owner_flag,
                 "from": d.get("transmission_date_from"),
                 "to": d.get("transmission_date_to"),
             })
@@ -61,6 +79,27 @@ async def load_port_visits(vessel_ids, start, end, client):
     )
     
     df = events.df()
+    if df.empty:
+        return df
+
+    df = df.copy()
+    df["_start"] = pd.to_datetime(df["start"], utc=True, errors="coerce")
+    df["_end"] = pd.to_datetime(df["end"], utc=True, errors="coerce")
+    df = df.sort_values("_start")
+
+    # --- FILTER 1 : drop corrupted visits (exit never detected) ---
+    # If a visit ends after the next one starts, its end date is wrong.
+    corrupted = df["_end"] > df["_start"].shift(-1)
+    df = df[~corrupted]
+    if df.empty:
+        return df
+
+    # --- FILTER 2 : keep only visits overlapping the requested window ---
+    win_start = pd.to_datetime(start, utc=True)
+    win_end = pd.to_datetime(end, utc=True) + pd.Timedelta(days=1)
+
+    overlaps = (df["_start"] < win_end) & (df["_end"] >= win_start)
+    df = df[overlaps].drop(columns=["_start", "_end"])
     if df.empty:
         return df
 
@@ -107,7 +146,7 @@ async def load_port_visits(vessel_ids, start, end, client):
 
 
 def generate_port_report(vessel_ids, vessel_name, start, end, client,
-                         progress_callback=None):
+                         owner=None, progress_callback=None):
     if progress_callback:
         progress_callback("Fetching port visits...", 0.3)
 
@@ -123,13 +162,16 @@ def generate_port_report(vessel_ids, vessel_name, start, end, client,
     if df.empty:
         raise ValueError("No port visits found for this vessel/period.")
 
+    df.insert(0, "owner", owner if owner else "Unknown")
     df.insert(0, "ship_name", vessel_name)
+
     safe = "".join(c for c in str(vessel_name) if c.isalnum() or c in " _-").strip()
-    out = f"PORT_visits_{safe}_{start}-{end}.csv"
 
-    try:
-        df.to_csv(out, index=False)
-    except PermissionError:
-        raise PermissionError(f"Close {out} before running the report.")
+    # Fichier temporaire : nettoyé par l'OS, pas dans le dossier du projet
+    tmp_dir = tempfile.gettempdir()
+    out = os.path.join(tmp_dir, f"PORT_visits_{safe}_{start}-{end}.csv")
 
-    return out, len(df)
+    df.to_csv(out, index=False)
+
+    n_ports = df["port_name"].nunique()
+    return out, len(df), n_ports

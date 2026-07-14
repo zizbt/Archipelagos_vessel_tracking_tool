@@ -749,7 +749,6 @@ class VesselTracker(TkinterDnD.Tk):
             self.pv_status_label.configure(text="No vessel found.", text_color="#FF5252")
             return
 
-        # Identité la plus récente en tête (évite d'afficher "Unknown")
         if "to" in df.columns:
             df = df.sort_values("to", ascending=False)
 
@@ -760,7 +759,6 @@ class VesselTracker(TkinterDnD.Tk):
             if pd.isnull(vid) or pd.isnull(mmsi):
                 continue
 
-            # Tous les vessel_id de ce MMSI (identités successives)
             ids = df[df["mmsi"] == mmsi]["vessel_id"].dropna().tolist()
 
             if mmsi in seen_mmsi:
@@ -769,8 +767,9 @@ class VesselTracker(TkinterDnD.Tk):
 
             name = row.get("ship_name") if pd.notnull(row.get("ship_name")) else "Unknown"
             flag = row.get("flag") if pd.notnull(row.get("flag")) else "?"
-            label = f"{name} | MMSI {mmsi} | {flag}"
-            self.pv_results[label] = ids          # <- une LISTE, plus un seul id
+            owner = row.get("owner") if pd.notnull(row.get("owner")) else "Owner unknown"
+            label = f"{name} | MMSI {mmsi} | {flag} | Owner Name: {owner}"
+            self.pv_results[label] = {"ids": ids, "name": name, "owner": owner, "mmsi": mmsi}
 
             ctk.CTkButton(self.pv_list_frame, text=label, fg_color="transparent",
                           text_color="white", anchor="w", hover_color="#1f538d",
@@ -804,17 +803,20 @@ class VesselTracker(TkinterDnD.Tk):
         self.pv_run_btn.configure(state="disabled")
         self.pv_status_label.configure(text="Fetching port visit events...", text_color="#FFB300")
 
-        label, vessel_ids = self.pv_selected_vessel
-        vessel_name = label.split(" | ")[0]
+        label, info = self.pv_selected_vessel
+        vessel_ids = info["ids"]
+        vessel_name = info["name"]
+        owner = info["owner"]
 
         def worker():
             try:
                 client = VP_gfw.get_gfw_client(self.api_key)
-                out, n = Port_visits.generate_port_report(
+                out, n, n_ports = Port_visits.generate_port_report(
                     vessel_ids, vessel_name, start, end, client,
+                    owner=owner,
                     progress_callback=self.update_pv_progress
                 )
-                self.after(0, lambda: self.finish_pv(out, n))
+                self.after(0, lambda: self.finish_pv(out, n, n_ports))
             except Exception as e:
                 msg = str(e)
                 print(msg)
@@ -826,10 +828,11 @@ class VesselTracker(TkinterDnD.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def finish_pv(self, out_file, n_visits):
+    def finish_pv(self, out_file, n_visits, n_ports):
         self.pv_progress.set(1.0)
-        self.pv_status_label.configure(text=f"{n_visits} port visits exported.",
-                                       text_color="#4CAF50")
+        self.pv_status_label.configure(
+            text=f"{n_visits} visits across {n_ports} distinct ports.",
+            text_color="#4CAF50")
         self.pv_run_btn.configure(text="Open CSV", state="normal", fg_color="#2E7D32",
                                   command=lambda: self.open_file(out_file))
 
