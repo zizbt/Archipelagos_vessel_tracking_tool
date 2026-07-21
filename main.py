@@ -15,6 +15,7 @@ import VP_report
 import AFE_report
 import AFE_bulk_map
 import AFE_map
+import AFE_yearly_map
 import Port_visits
 
 # --- Configuration ---
@@ -158,6 +159,11 @@ class VesselTracker(TkinterDnD.Tk):
         # --- NEW BUTTON TRIGGERED HERE ---
         ctk.CTkButton(frame, text="Generate AFE Heatmap (Single Vessel)", height=60, width=350, 
                       command=self.show_afe_single_vessel_view).pack(pady=10)
+        
+        ctk.CTkButton(frame, text="Generate Greece Heatmap by Year", height=60, width=350,
+                      fg_color="#1f6e3d",
+                      command=self.show_afe_greece_view).pack(pady=10)
+                      
  
 
 
@@ -1037,6 +1043,111 @@ class VesselTracker(TkinterDnD.Tk):
 
         # 3. Spawn a dedicated background thread to run the process
         threading.Thread(target=run_afe_heatmap_worker, daemon=True).start()
+
+    def show_afe_greece_view(self):
+        self.clear_view()
+        frame = ctk.CTkFrame(self, corner_radius=15)
+        frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkButton(header, text="← Back", width=60, fg_color="transparent",
+                      command=self.show_fishing_effort_view).pack(side="left")
+
+        ctk.CTkLabel(frame, text="Greece AFE Heatmap by Year",
+                     font=ctk.CTkFont(size=22, weight="bold")).pack(pady=20)
+
+        ctk.CTkLabel(frame, text="Generate a heatmap showing Apparent Fishing Effort (AFE) for Greece from 2020 to 2026.",
+                     justify="center").pack(pady=(0, 20))
+
+        self.afe_greece_btn = ctk.CTkButton(
+            frame, text="Generate Greece Heatmap", height=50, width=300,
+            command=self.handle_generate_afe_heatmap_yearly)
+        self.afe_greece_btn.pack(pady=10)
+
+        self.afe_greece_status_label = ctk.CTkLabel(frame, text="")
+        self.afe_greece_status_label.pack(pady=5)
+
+        self.afe_greece_progress = ctk.CTkProgressBar(frame, width=300)
+        self.afe_greece_progress.set(0.0)
+        # (pack() est fait au lancement, dans handle_generate_afe_heatmap_yearly)
+        
+    def get_afe_greece_cache_path(self, year):
+        cache_dir = "afe_greece_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"AFE_GRC_{year}.csv")
+    
+    def handle_generate_afe_heatmap_yearly(self):
+        self.afe_greece_progress.pack(pady=5)
+        self.afe_greece_progress.set(0.0)
+        self.afe_greece_status_label.configure(text="Checking cache...", text_color="#FFB300")
+        self.afe_greece_btn.configure(state="disabled")
+
+        def update_progress(text, value):
+            self.after(0, lambda: self.afe_greece_status_label.configure(text=text))
+            self.after(0, lambda: self.afe_greece_progress.set(value))
+
+        def worker():
+            try:
+                all_years = list(range(2020, 2027))  # 2020 -> 2026
+                dfs = []
+
+                for i, y in enumerate(all_years):
+                    cache_path = self.get_afe_greece_cache_path(y)
+
+                    if os.path.exists(cache_path):
+                        self.after(0, lambda y=y: self.afe_greece_status_label.configure(
+                            text=f"Chargement cache {y}...", text_color="#FFB300"))
+                        year_df = pd.read_csv(cache_path)
+                    else:
+                        self.after(0, lambda y=y: self.afe_greece_status_label.configure(
+                            text=f"Telechargement GFW {y}...", text_color="#FFB300"))
+                        client = VP_gfw.get_gfw_client(self.api_key)
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        year_df, _, _ = loop.run_until_complete(
+                            VP_gfw.bulk_load_data("GRC", f"{y}-01-01", f"{y}-12-31",
+                                                  client, update_progress, data="AFE")
+                        )
+                        loop.close()
+                        if not year_df.empty:
+                            year_df.to_csv(cache_path, index=False)
+
+                    if not year_df.empty:
+                        dfs.append(year_df)
+
+                    update_progress(f"Annee {y} prete", (i + 1) / len(all_years) * 0.15)
+
+                if not dfs:
+                    raise ValueError("Aucune donnee AFE trouvee.")
+
+                df = pd.concat(dfs, ignore_index=True)
+
+                if 'timestamp' in df.columns and 'date' not in df.columns:
+                    df['date'] = df['timestamp']
+
+                out_file = AFE_yearly_map.create_AFE_heatmap(
+                    df, buffer_dis=3, filter_type="All Vessels",
+                    progress_callback=update_progress,
+                )
+
+                self.after(0, lambda: self.afe_greece_btn.configure(
+                    text="Open Greece Heatmap",
+                    state="normal",
+                    fg_color="#2E7D32",
+                    command=lambda: self.open_file(out_file)
+                ))
+                self.after(0, lambda: self.afe_greece_status_label.configure(
+                    text="Greece heatmap ready.", text_color="#4CAF50"))
+                self.after(0, lambda: self.afe_greece_progress.set(1.0))
+
+            except Exception as e:
+                err = str(e)
+                self.after(0, lambda: self.afe_greece_status_label.configure(
+                    text=f"Error: {err}", text_color="#F44336"))
+                self.after(0, lambda: self.afe_greece_btn.configure(state="normal"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def select_afe_vessel(self, name):
         self.current_selected_id = self.all_vessels[name]
