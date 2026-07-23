@@ -132,7 +132,7 @@ class VesselTracker(TkinterDnD.Tk):
         ctk.CTkButton(frame, text="Generate AIS Gap Map (All Vessels)", height=60, width=350, 
                     command=self.show_bulk_map_view).pack(pady=10)
         
-        ctk.CTkButton(frame, text="Generate AIS Gap Map (single vessel)", height=60, width=350, 
+        ctk.CTkButton(frame, text="Generate AIS Gap Map (Single vessel)", height=60, width=350, 
                       command=self.show_map_view).pack(pady=10)
 
     # --- VIEW: APPARENT FISHING EFFORT MENU ---
@@ -333,6 +333,9 @@ class VesselTracker(TkinterDnD.Tk):
 
         self.run_bulk_btn = ctk.CTkButton(frame, text="Generate Bulk Map", command=self.handle_generate_bulk_map, width=250, height=40)
         self.run_bulk_btn.pack(pady=20)
+
+        self.open_encounters_btn = ctk.CTkButton(frame, text="Open Encounters CSV", fg_color="#1f538d",
+                                                   command=self.open_encounters_csv, width=250, height=35)
 
     # --- VIEW: AIS GAP MAP GENERATOR (SINGLE VESSEL)---
     def show_map_view(self):
@@ -1387,22 +1390,27 @@ class VesselTracker(TkinterDnD.Tk):
                 filter_choice = self.bulk_filter_var.get()
                 buffer_choice = float(self.bulk_buffer_var.get())
                 
-                # Execute create_bulk_map passing our bulk UI progress updater directly
-                out_file = VP_bulk_map.create_bulk_map(
+                out_file, encounters_df = VP_bulk_map.create_bulk_map(
                     df, 
                     buffer_dis=buffer_choice, 
                     filter_type=filter_choice,
                     progress_callback=self.update_bulk_progress
                 )
+                self.last_encounters_df = encounters_df
                 
-                # Successfully completed processing and writing out file
-                self.update_bulk_progress("Bulk Map Ready!", 1.0)
+                status_text = "Bulk Map Ready!" if encounters_df is None or encounters_df.empty else "Bulk Map Ready! (+ encounters CSV exported)"
+                self.update_bulk_progress(status_text, 1.0)
                 self.run_bulk_btn.configure(
                     text="Open AIS Gap Map", 
                     state="normal", 
                     fg_color="#2E7D32", 
                     command=lambda: self.open_file(out_file)
                 )
+
+                if encounters_df is not None and not encounters_df.empty:
+                    self.open_encounters_btn.pack(pady=(0, 10), before=self.bulk_progress)
+                else:
+                    self.open_encounters_btn.pack_forget()
                 
             except Exception as e:
                 self.bulk_status_label.configure(text=f"Error: {str(e)[:60]}", text_color="#FF5252")
@@ -1610,6 +1618,15 @@ class VesselTracker(TkinterDnD.Tk):
         if platform.system() == "Windows": os.startfile(path)
         elif platform.system() == "Darwin": subprocess.call(["open", path])
         else: subprocess.call(["xdg-open", path])
+
+    def open_encounters_csv(self):
+        if not hasattr(self, 'last_encounters_df') or self.last_encounters_df is None:
+            return
+
+        import tempfile
+        temp_path = os.path.join(tempfile.gettempdir(), "encounter_events.csv")
+        self.last_encounters_df.to_csv(temp_path, index=False)
+        self.open_file(temp_path)
 
     def handle_reset(self):
         if os.path.exists(CONFIG_FILE): os.remove(CONFIG_FILE)

@@ -21,6 +21,11 @@ def get_encounter_events(df, dist_threshold_meters=500, time_threshold_hours=2):
     
     # Keep only columns we absolutely need to save memory
     cols = ['vessel_id', 'ship_name', 'date', 'geometry']
+    cols = ['vessel_id', 'ship_name', 'date', 'geometry']
+    optional_cols = ['vessel_type', 'gear_type']
+    for c in optional_cols:
+        if c in gdf_metric.columns:
+            cols.append(c)
     gdf_metric = gdf_metric[cols]
 
 
@@ -70,24 +75,28 @@ def get_encounter_events(df, dist_threshold_meters=500, time_threshold_hours=2):
         if dur >= time_threshold_hours:
             # Pick a middle point for the geometry representation
             mid_idx = len(grp) // 2
+            mid_row = grp.iloc[mid_idx]
             raw_encounters.append({
-                'v1': grp.iloc[mid_idx]['ship_name_left'],
-                'v2': grp.iloc[mid_idx]['ship_name_right'],
+                'v1': mid_row['ship_name_left'],
+                'v1_type': mid_row.get('vessel_type_left', 'Unknown'),
+                'v1_gear': mid_row.get('gear_type_left', 'Unknown'),
+                'v2': mid_row['ship_name_right'],
+                'v2_type': mid_row.get('vessel_type_right', 'Unknown'),
+                'v2_gear': mid_row.get('gear_type_right', 'Unknown'),
                 'start': start,
                 'end': end,
                 'duration': round(dur, 2),
-                'geom': grp.iloc[mid_idx]['geometry'] # left side point geometry
+                'geom': mid_row['geometry'] # left side point geometry
             })
 
     if not raw_encounters:
         # Match your original empty structure
         return gpd.GeoDataFrame(columns=['geometry', 'popup_text'], crs="EPSG:4326")
 
-
-    # 8. Final Clustered Popup Construction (Keeping your original logic structure)
+    # 8. Final Clustered Popup Construction (garde le HTML pour la carte + données brutes pour l'export)
     temp_gdf = gpd.GeoDataFrame(raw_encounters, geometry='geom', crs="EPSG:32634")
     final_data = []
-    
+
     for _, row in temp_gdf.groupby(temp_gdf.geometry.buffer(500).to_wkt()):
         popup_lines = []
         for _, enc in row.iterrows():
@@ -96,13 +105,45 @@ def get_encounter_events(df, dist_threshold_meters=500, time_threshold_hours=2):
                    f"End: {enc['end'].strftime('%Y-%m-%d %H:%M')}<br>" \
                    f"Duration: {enc['duration']}h<br>---"
             popup_lines.append(line)
-        
-        final_data.append({
-            'geometry': row.iloc[0]['geom'],
-            'popup_text': "<br>".join(popup_lines)
-        })
 
-    return gpd.GeoDataFrame(final_data, crs="EPSG:32634").to_crs("EPSG:4326")
+        # on garde une ligne par rencontre individuelle (pas juste le popup groupé)
+        for _, enc in row.iterrows():
+            final_data.append({
+                'geometry': row.iloc[0]['geom'],
+                'popup_text': "<br>".join(popup_lines),
+                'vessel_1': enc['v1'],
+                'vessel_1_type': enc['v1_type'],
+                'vessel_1_gear': enc['v1_gear'],
+                'vessel_2': enc['v2'],
+                'vessel_2_type': enc['v2_type'],
+                'vessel_2_gear': enc['v2_gear'],
+                'start': enc['start'],
+                'end': enc['end'],
+                'duration_hours': enc['duration'],
+            })
+
+    result = gpd.GeoDataFrame(final_data, crs="EPSG:32634").to_crs("EPSG:4326")
+    return result
+
+def get_encounters_dataframe(encounter_gdf):
+    """
+    Converts the encounter GeoDataFrame into a regular DataFrame with latitude and longitude columns.
+    """
+    if encounter_gdf is None or encounter_gdf.empty:
+        return None
+
+    df_out = encounter_gdf.copy()
+    df_out['latitude'] = df_out.geometry.y
+    df_out['longitude'] = df_out.geometry.x
+
+    cols = ['vessel_1', 'vessel_1_type', 'vessel_1_gear',
+            'vessel_2', 'vessel_2_type', 'vessel_2_gear',
+            'start', 'end', 'duration_hours', 'latitude', 'longitude']
+    cols = [c for c in cols if c in df_out.columns]
+    df_out = df_out[cols].sort_values('start')
+
+    return df_out
+
 
 def create_bulk_map(df, buffer_dis=3, filter_type="All Vessels", progress_callback=None):
     df = df.copy()
@@ -348,6 +389,9 @@ def create_bulk_map(df, buffer_dis=3, filter_type="All Vessels", progress_callba
     if not encounter_gdf.empty:
         enc_outside = gpd.sjoin(encounter_gdf, ais_buffer_gdf, how="left", predicate="within")
         encounter_gdf = enc_outside[enc_outside['index_right'].isna()].copy()
+        encounters_df = None
+        if not encounter_gdf.empty:
+            encounters_df = get_encounters_dataframe(encounter_gdf)
 
         if not encounter_gdf.empty:
             enc_group = folium.FeatureGroup(name="Encounter Events")
@@ -534,4 +578,4 @@ def create_bulk_map(df, buffer_dis=3, filter_type="All Vessels", progress_callba
     update_progress("Saving map to folder...", 0.95)
     output_path = "AIS_gap_map_allvessels.html"
     m.save(output_path)
-    return output_path
+    return output_path, encounters_df
