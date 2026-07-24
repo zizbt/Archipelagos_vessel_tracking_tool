@@ -10,6 +10,7 @@ import pandas as pd
 from tkinter import filedialog
 import VP_gfw 
 import VP_map 
+import VP_loitering_vessels
 import VP_bulk_map
 import VP_report
 import AFE_report
@@ -134,6 +135,11 @@ class VesselTracker(TkinterDnD.Tk):
         
         ctk.CTkButton(frame, text="Generate AIS Gap Map (Single vessel)", height=60, width=350, 
                       command=self.show_map_view).pack(pady=10)
+
+        ctk.CTkButton(frame, text="Detect Loitering Vessels", height=60, width=350,
+                      fg_color="#b8860b",
+                      command=self.show_loitering_view).pack(pady=10)
+        
 
     # --- VIEW: APPARENT FISHING EFFORT MENU ---
     def show_fishing_effort_view(self):
@@ -336,6 +342,153 @@ class VesselTracker(TkinterDnD.Tk):
 
         self.open_encounters_btn = ctk.CTkButton(frame, text="Open Encounters CSV", fg_color="#1f538d",
                                                    command=self.open_encounters_csv, width=250, height=35)
+
+    # --- VIEW: LOITERING DETECTOR ---
+    def show_loitering_view(self):
+        self.clear_view()
+        self.selected_file = None
+        frame = ctk.CTkFrame(self, corner_radius=15)
+        frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", padx=10, pady=5)
+        ctk.CTkButton(header, text="← Back", width=60, fg_color="transparent", command=self.show_vessel_presence_menu).pack(side="left")
+
+        ctk.CTkLabel(frame, text="Detect Loitering Vessels", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=10)
+        self.loiter_desc_label = ctk.CTkLabel(
+            frame,
+            text="Detects vessels that stay in a small area for an extended period at low speed "
+                 "(possible illegal fishing, transshipment or suspicious anchoring).",
+            font=ctk.CTkFont(size=12),
+            wraplength=400
+        )
+        self.loiter_desc_label.pack(pady=10, padx=20, fill="x")
+
+        self.loiter_drop_frame = ctk.CTkFrame(frame, width=450, height=120, border_width=2, border_color="gray")
+        self.loiter_drop_frame.pack(pady=10, padx=20)
+        self.loiter_drop_frame.pack_propagate(False)
+
+        self.loiter_status_label = ctk.CTkLabel(self.loiter_drop_frame, text="Drag & Drop CSV here\n-- or --")
+        self.loiter_status_label.pack(expand=True, pady=(10, 0))
+
+        ctk.CTkButton(self.loiter_drop_frame, text="Browse", command=self.browse_loiter_file).pack(pady=10)
+
+        self.loiter_drop_frame.drop_target_register(DND_FILES)
+        self.loiter_drop_frame.dnd_bind('<<Drop>>', self.handle_loiter_drop)
+
+        ctk.CTkLabel(frame, text="Vessel Filter:", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
+        self.loiter_filter_var = ctk.StringVar(value="All Vessels")
+        self.loiter_filter_toggle = ctk.CTkSegmentedButton(
+            frame,
+            values=["All Vessels", "Trawlers Only"],
+            variable=self.loiter_filter_var
+        )
+        self.loiter_filter_toggle.pack(pady=5)
+
+        ctk.CTkLabel(frame, text="Speed Threshold (knots):", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
+        self.loiter_speed_var = ctk.StringVar(value="1.5")
+        self.loiter_speed_menu = ctk.CTkOptionMenu(
+            frame,
+            values=["0.5", "1", "1.5", "2", "3"],
+            variable=self.loiter_speed_var
+        )
+        self.loiter_speed_menu.pack(pady=5)
+
+        ctk.CTkLabel(frame, text="Minimum Duration (hours):", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
+        self.loiter_duration_var = ctk.StringVar(value="4")
+        self.loiter_duration_menu = ctk.CTkOptionMenu(
+            frame,
+            values=["2", "4", "6", "8", "12", "24"],
+            variable=self.loiter_duration_var
+        )
+        self.loiter_duration_menu.pack(pady=5)
+
+        self.loiter_progress = ctk.CTkProgressBar(frame, width=300)
+        self.loiter_progress.set(0)
+
+        self.run_loiter_btn = ctk.CTkButton(frame, text="Generate Loitering Map", command=self.handle_generate_loitering_map, width=250, height=40)
+        self.run_loiter_btn.pack(pady=20)
+
+        self.open_loiter_csv_btn = ctk.CTkButton(frame, text="Open Loitering CSV", fg_color="#1f538d",
+                                                   command=self.open_loitering_csv, width=250, height=35)
+
+    # --- LOGIC: LOITERING ---
+    def browse_loiter_file(self):
+        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
+        if path: self.update_loiter_selection(path)
+
+    def handle_loiter_drop(self, event):
+        path = event.data.strip().strip('{}')
+        if path.lower().endswith('.csv'): self.update_loiter_selection(path)
+
+    def update_loiter_selection(self, path):
+        self.selected_file = path
+        self.loiter_status_label.configure(text=f"Selected: {os.path.basename(path)}", text_color="#4CAF50")
+
+    def update_loiter_progress(self, text, value):
+        self.loiter_status_label.configure(text=text, text_color="#FFB300" if value < 1.0 else "#4CAF50")
+        self.loiter_progress.set(value)
+
+    def handle_generate_loitering_map(self):
+        if not self.selected_file:
+            self.loiter_status_label.configure(text="Please select a file first!", text_color="#FF5252")
+            return
+
+        self.loiter_progress.pack(pady=5)
+        self.loiter_progress.set(0.0)
+        self.loiter_status_label.configure(text="Initializing loitering detection...", text_color="#FFB300")
+        self.run_loiter_btn.configure(state="disabled")
+        self.open_loiter_csv_btn.pack_forget()
+
+        def run_loiter_logic_worker():
+            try:
+                df = pd.read_csv(self.selected_file)
+                if 'timestamp' in df.columns and 'date' not in df.columns:
+                    df['date'] = df['timestamp']
+
+                filter_choice = self.loiter_filter_var.get()
+                speed_thresh = float(self.loiter_speed_var.get())
+                min_duration = float(self.loiter_duration_var.get())
+
+                out_file, events_df = VP_loitering_vessels.create_loitering_map(
+                    df,
+                    speed_threshold_knots=speed_thresh,
+                    min_duration_hours=min_duration,
+                    filter_type=filter_choice,
+                    progress_callback=self.update_loiter_progress
+                )
+                self.last_loitering_df = VP_loitering_vessels.get_loitering_dataframe(events_df)
+
+                n_events = 0 if events_df is None else len(events_df)
+                status_text = f"Map Ready! {n_events} loitering event(s) found." if n_events else "Map Ready! No loitering detected."
+                self.update_loiter_progress(status_text, 1.0)
+                self.run_loiter_btn.configure(
+                    text="Open Loitering Map",
+                    state="normal",
+                    fg_color="#2E7D32",
+                    command=lambda: self.open_file(out_file)
+                )
+
+                if self.last_loitering_df is not None and not self.last_loitering_df.empty:
+                    self.open_loiter_csv_btn.pack(pady=(0, 10), before=self.loiter_progress)
+                else:
+                    self.open_loiter_csv_btn.pack_forget()
+
+            except Exception as e:
+                self.loiter_status_label.configure(text=f"Error: {str(e)[:60]}", text_color="#FF5252")
+                self.loiter_progress.set(0)
+                self.run_loiter_btn.configure(state="normal", text="Generate Loitering Map", fg_color="#1f538d")
+
+        threading.Thread(target=run_loiter_logic_worker, daemon=True).start()
+
+    def open_loitering_csv(self):
+        if not hasattr(self, 'last_loitering_df') or self.last_loitering_df is None:
+            return
+        import tempfile
+        temp_path = os.path.join(tempfile.gettempdir(), "loitering_events.csv")
+        self.last_loitering_df.to_csv(temp_path, index=False)
+        self.open_file(temp_path)
+
 
     # --- VIEW: AIS GAP MAP GENERATOR (SINGLE VESSEL)---
     def show_map_view(self):
